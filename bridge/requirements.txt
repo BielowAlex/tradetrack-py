@@ -1,0 +1,4 @@
+MetaTrader5>=5.0.45
+numpy>=1.20.0
+requests>=2.28.0
+pytz

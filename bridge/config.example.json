@@ -1,0 +1,9 @@
+{
+  "api_base_url": "https://yourapp.com",
+  "sync_token": "your_mt5_token_from_web_app",
+  "trading_account_id": "cuid_from_your_app",
+  "mt5_login": 12345678,
+  "mt5_password": "investor_password",
+  "mt5_server": "Broker-Demo",
+  "mt5_path": ""
+}
