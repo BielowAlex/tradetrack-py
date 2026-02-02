@@ -68,6 +68,7 @@ pip install -r requirements.txt
 - **POST /api/mt5/sync/request** — тіло `{ "trading_account_id": "<cuid>" }`, авторизація сесія. Встановити прапорець запиту синку (кнопка «Отримати угоди» на фронті викликає **локально** `http://localhost:8765/sync-request`, тож цей ендпоінт на Next.js опційний, якщо фронт не опитує сервер).
 - **POST /api/mt5/sync/deals** — тіло `{ "trading_account_id": "<cuid>", "deals": [ ... ] }`, Bearer. Валідація Mt5Token, збереження угод.
 - **POST /api/mt5/bridge/sync-done** — тіло `{ "trading_account_id": "<cuid>" }`, Bearer. Скинути прапорець після синку.
+- **GET /api/mt5/bridge/pending-sync** — query `trading_account_id`, Bearer. Bridge викликає перед синком і використовує відповідь для визначення діапазону угод. Очікувана відповідь: `{ "sync_requested": bool, "requested_at": "ISO8601", "last_deal_at": "ISO8601" | null, "last_deal_ticket": number | null }`. Якщо є `last_deal_at` — bridge тягне угоди з MT5 лише після цього часу; якщо null — використовує локальний `last_sync_at` або 30 днів назад.
 
 Формат **deals**: масив об’єктів з MT5 `history_deals_get` (snake_case): `ticket`, `position_id`, `time`, `entry`, `type`, `volume`, `profit`, `symbol` тощо. Якщо у вас processMt5Deals очікує camelCase — перетворіть на стороні Next.js.
 

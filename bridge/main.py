@@ -19,7 +19,7 @@ from typing import Optional
 import pytz
 import requests
 
-from config import load_config, load_last_sync, save_last_sync, get_language
+from config import load_config, save_last_sync, get_language
 from config_server import run_bridge_server_forever, run_config_server_until_received
 from gui import ask_language_at_startup, create_window
 from i18n import get_text
@@ -29,6 +29,25 @@ from mt5_sync import connect as mt5_connect, disconnect as mt5_disconnect, get_d
 def get_headers(cfg: dict) -> dict:
     token = (cfg.get("sync_token") or "").strip()
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+
+def get_pending_sync(cfg: dict) -> dict:
+    """GET /api/mt5/bridge/pending-sync. Повертає sync_requested, requested_at, last_deal_at, last_deal_ticket."""
+    base = (cfg.get("api_base_url") or "").rstrip("/")
+    tid = cfg.get("trading_account_id") or ""
+    url = f"{base}/api/mt5/bridge/pending-sync"
+    try:
+        r = requests.get(
+            url,
+            params={"trading_account_id": tid},
+            headers=get_headers(cfg),
+            timeout=10,
+        )
+        if r.status_code != 200:
+            return {}
+        return r.json()
+    except (requests.RequestException, ValueError):
+        return {}
 
 
 def post_bridge_connected(cfg: dict) -> bool:
@@ -79,6 +98,42 @@ def _print_mt5_hint(err: str) -> None:
     print("  • Запустіть bridge від того ж користувача, що й MT5.")
     print("  • У MT5: Сервіс → Налаштування → Доп. → дозвольте «Разрешить автоматическую торговлю».")
     print("  • Перевірте логін, інвестор-пароль і сервер у config.json (інвестор-пароль, не основний).")
+
+
+# MT5: type 0 = BUY, 1 = SELL; 2+ = BALANCE, CREDIT, CHARGE тощо — не відправляємо
+def _mt5_deals_to_api(mt5_deals: list) -> list:
+    """Перетворює список угод з MT5 (_asdict()) у формат веб-API. Лише реальні торги (BUY/SELL)."""
+    result = []
+    for d in mt5_deals:
+        deal_type = d.get("type", 0)
+        if deal_type not in (0, 1):
+            continue
+        direction = "BUY" if deal_type == 0 else "SELL"
+        position_id = d.get("position_id")
+        if position_id is None or position_id == 0:
+            position_id = d.get("ticket", 0)
+        try:
+            position_id = int(position_id)
+        except (TypeError, ValueError):
+            position_id = int(d.get("ticket", 0))
+        time_val = d.get("time")
+        if hasattr(time_val, "timestamp"):
+            time_val = int(time_val.timestamp())
+        else:
+            time_val = int(time_val) if time_val is not None else 0
+        result.append({
+            "ticket": d.get("ticket"),
+            "positionId": position_id,
+            "symbol": d.get("symbol", ""),
+            "direction": direction,
+            "profit": float(d.get("profit", 0) or 0),
+            "volume": float(d.get("volume", 0) or 0),
+            "price": float(d.get("price", 0) or 0),
+            "time": time_val,
+            "commission": float(d.get("commission", 0) or 0),
+            "swap": float(d.get("swap", 0) or 0),
+        })
+    return result
 
 
 def post_sync_deals(cfg: dict, deals: list) -> bool:
@@ -133,10 +188,12 @@ def run_sync(cfg: dict) -> tuple[bool, str, int]:
         return False, msg, 0
 
     try:
-        last = load_last_sync()
-        if last:
-            from_time = datetime.fromisoformat(last.replace("Z", "+00:00"))
+        pending = get_pending_sync(cfg)
+        last_deal_at = pending.get("last_deal_at") if isinstance(pending, dict) else None
+        if last_deal_at and isinstance(last_deal_at, str):
+            from_time = datetime.fromisoformat(last_deal_at.replace("Z", "+00:00"))
         else:
+            # Немає last_deal_at з Next — тягнемо всі угоди за період
             from_time = datetime.now(pytz.UTC) - timedelta(days=30)
         to_time = datetime.now(pytz.UTC)
         deals = get_deals(from_time, to_time)
@@ -146,11 +203,16 @@ def run_sync(cfg: dict) -> tuple[bool, str, int]:
             post_bridge_sync_done(cfg)
             return True, get_text("msg_no_new_deals", lang), 0
 
-        if not post_sync_deals(cfg, deals):
+        api_deals = _mt5_deals_to_api(deals)
+        if not api_deals:
+            save_last_sync(to_time.isoformat())
+            post_bridge_sync_done(cfg)
+            return True, get_text("msg_no_new_deals", lang), 0
+        if not post_sync_deals(cfg, api_deals):
             return False, get_text("msg_send_deals_failed", lang), 0
         save_last_sync(to_time.isoformat())
         post_bridge_sync_done(cfg)
-        return True, get_text("msg_synced_n_deals", lang).format(len(deals)), len(deals)
+        return True, get_text("msg_synced_n_deals", lang).format(len(api_deals)), len(api_deals)
     finally:
         mt5_disconnect()
 

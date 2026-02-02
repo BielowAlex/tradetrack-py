@@ -12,7 +12,15 @@ import tkinter as tk
 from tkinter import ttk, scrolledtext
 
 from config import get_language, save_language, has_saved_language
-from i18n import LANG_UK, LANG_EN, get_text, SITE_URL_UK, SITE_URL_EN
+from i18n import (
+    LANG_UK,
+    LANG_EN,
+    get_text,
+    SITE_URL_UK,
+    SITE_URL_EN,
+    SITE_CONTACT_URL_UK,
+    SITE_CONTACT_URL_EN,
+)
 
 
 def ask_language_at_startup() -> None:
@@ -116,7 +124,15 @@ def create_window(
         cursor="hand2",
         command=lambda: webbrowser.open(SITE_URL_UK if get_language() == LANG_UK else SITE_URL_EN),
     )
-    site_btn.pack()
+    site_btn.pack(side=tk.LEFT, padx=(0, 8))
+    contact_btn = tk.Button(
+        site_frame,
+        text=get_text("btn_contact", lang),
+        font=("Segoe UI", 9),
+        cursor="hand2",
+        command=lambda: webbrowser.open(SITE_CONTACT_URL_UK if get_language() == LANG_UK else SITE_CONTACT_URL_EN),
+    )
+    contact_btn.pack(side=tk.LEFT)
 
     # Вкладка «Налаштування»
     tab_settings = tk.Frame(notebook, padx=16, pady=16)

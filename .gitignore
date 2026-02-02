@@ -30,3 +30,9 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+# Bridge credentials and state
+bridge/config.json
+bridge/state.json
+config.json
+state.json

@@ -89,6 +89,7 @@ TEXTS: dict[str, dict[str, str]] = {
     },
     "lang_select_title": {"uk": "Оберіть мову", "en": "Select language"},
     "btn_open_site": {"uk": "Відкрити сайт TradeTrack", "en": "Open TradeTrack website"},
+    "btn_contact": {"uk": "Контакт", "en": "Contact"},
     "api_description": {
         "uk": "Клієнт TradeTrack для підключення MT5 до акаунту на сайті. Синхронізація тільки по запиту з фронту.",
         "en": "TradeTrack client for connecting MT5 to your site account. Sync only on request from the frontend.",
@@ -105,8 +106,10 @@ TEXTS: dict[str, dict[str, str]] = {
     },
 }
 
-SITE_URL_UK = "https://tradetrack.space/uk"
-SITE_URL_EN = "https://tradetrack.space/en"
+SITE_URL_UK = "https://www.tradetrack.space/uk"
+SITE_URL_EN = "https://www.tradetrack.space/en"
+SITE_CONTACT_URL_UK = "https://www.tradetrack.space/uk/contact"
+SITE_CONTACT_URL_EN = "https://www.tradetrack.space/en/contact"
 
 
 def get_text(key: str, lang: Optional[str] = None) -> str:
