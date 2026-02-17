@@ -6,7 +6,7 @@ import json
 import queue
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Callable, Optional
+from typing import Callable, Optional, Dict, Any
 
 from config import load_config, save_config, get_language
 from i18n import get_text
@@ -27,7 +27,7 @@ def _send_cors_headers(handler: BaseHTTPRequestHandler) -> None:
 class BridgeHandler(BaseHTTPRequestHandler):
     """Обробник: /config, /sync-request; не завершує сервер після /config."""
     on_config_received: Optional[Callable[[], None]] = None
-    sync_runner: Optional[Callable[[dict], tuple[bool, str, int]]] = None  # (success, message, synced_count)
+    sync_runner: Optional[Callable[..., tuple[bool, str, int, list]]] = None  # (cfg, last_sync_at_iso?) -> (success, message, synced_count, raw_deals)
     msg_queue: Optional[queue.Queue] = None  # (log|status, msg[, is_error])
 
     def log_message(self, format: str, *args: object) -> None:
@@ -122,20 +122,57 @@ class BridgeHandler(BaseHTTPRequestHandler):
         if BridgeHandler.on_config_received:
             BridgeHandler.on_config_received()
 
+    def _cfg_from_data(self, data: Dict[str, Any]) -> Optional[dict]:
+        """Побудувати cfg з тіла запиту; якщо є всі ключі — повернути, інакше None."""
+        missing = [k for k in REQUIRED_KEYS if not data.get(k)]
+        if missing:
+            return None
+        try:
+            login = data["mt5_login"]
+            login = int(login)
+        except (TypeError, ValueError):
+            return None
+        return {
+            "api_base_url": str(data["api_base_url"]).strip().rstrip("/"),
+            "sync_token": str(data["sync_token"]).strip(),
+            "trading_account_id": str(data["trading_account_id"]).strip(),
+            "mt5_login": login,
+            "mt5_password": str(data["mt5_password"]),
+            "mt5_server": str(data["mt5_server"]).strip(),
+            "mt5_path": str(data.get("mt5_path") or "").strip(),
+        }
+
     def _handle_sync_request(self) -> None:
         if BridgeHandler.sync_runner is None:
             self._send_json(500, {"error": "Sync runner not set"})
             return
-        try:
-            cfg = load_config()
-        except FileNotFoundError:
-            self._send_json(400, {"error": "No config. Connect from browser first."})
+        data = {}
+        if self.command == "POST" and self.headers.get("Content-Length"):
+            try:
+                content_length = int(self.headers.get("Content-Length", 0))
+                if content_length > 0:
+                    body = self.rfile.read(content_length)
+                    data = json.loads(body.decode("utf-8")) if body else {}
+            except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+                pass
+        cfg = self._cfg_from_data(data) if data else None
+        if cfg is None:
+            self._send_json(
+                400,
+                {"error": "Credentials required in request body (api_base_url, sync_token, trading_account_id, mt5_login, mt5_password, mt5_server). Next sends them for each account."},
+            )
             return
+        last_sync_at_iso = data.get("lastSyncAt") or data.get("last_sync_at") if data else None
+        if last_sync_at_iso is not None and not isinstance(last_sync_at_iso, str):
+            last_sync_at_iso = None
         lang = get_language()
         self._status(get_text("status_syncing", lang))
         self._log(get_text("log_sync_requested", lang))
         self._log(get_text("status_syncing", lang))
-        success, message, synced = BridgeHandler.sync_runner(cfg)
+        result = BridgeHandler.sync_runner(cfg, last_sync_at_iso)
+        success = result[0]
+        message = result[1]
+        synced = result[2]
         if success:
             self._send_json(200, {"ok": True, "message": message, "synced": synced})
             self._status(get_text("status_connected", lang))
@@ -157,7 +194,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
 
 def run_bridge_server_forever(
-    sync_runner: Callable[[dict], tuple[bool, str, int]],
+    sync_runner: Callable[..., tuple[bool, str, int, list]],
     on_config_received: Callable[[], None],
     msg_queue: queue.Queue,
 ):

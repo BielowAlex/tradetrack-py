@@ -97,41 +97,112 @@ def _print_mt5_hint(err: str) -> None:
     print("\nПідказка (-6 Authorization failed):")
     print("  • Запустіть bridge від того ж користувача, що й MT5.")
     print("  • У MT5: Сервіс → Налаштування → Доп. → дозвольте «Разрешить автоматическую торговлю».")
-    print("  • Перевірте логін, інвестор-пароль і сервер у config.json (інвестор-пароль, не основний).")
+    print("  • Перевірте логін, пароль і сервер у config.json.")
 
 
-# MT5: type 0 = BUY, 1 = SELL; 2+ = BALANCE, CREDIT, CHARGE тощо — не відправляємо
-def _mt5_deals_to_api(mt5_deals: list) -> list:
-    """Перетворює список угод з MT5 (_asdict()) у формат веб-API. Лише реальні торги (BUY/SELL)."""
-    result = []
+# MT5: type 0 = BUY, 1 = SELL; entry 0 = IN (open), 1 = OUT (close). Відправляємо лише закриття (OUT), щоб не тягнути відкриті позиції.
+DEAL_ENTRY_OUT = 1
+
+
+def _deal_to_item(d: dict) -> dict:
+    deal_type = d.get("type", 0)
+    direction = "BUY" if deal_type == 0 else "SELL"
+    position_id = d.get("position_id")
+    if position_id is None or position_id == 0:
+        position_id = d.get("ticket", 0)
+    try:
+        position_id = int(position_id)
+    except (TypeError, ValueError):
+        position_id = int(d.get("ticket", 0))
+    time_val = d.get("time")
+    if hasattr(time_val, "timestamp"):
+        time_val = int(time_val.timestamp())
+    else:
+        time_val = int(time_val) if time_val is not None else 0
+    return {
+        "ticket": d.get("ticket"),
+        "positionId": position_id,
+        "symbol": str(d.get("symbol", "")).strip(),
+        "direction": direction,
+        "profit": float(d.get("profit", 0) or 0),
+        "volume": float(d.get("volume", 0) or 0),
+        "price": float(d.get("price", 0) or 0),
+        "time": time_val,
+        "commission": float(d.get("commission", 0) or 0),
+        "swap": float(d.get("swap", 0) or 0),
+        "_position_id": position_id,
+        "_time": time_val,
+        "_entry": d.get("entry"),
+    }
+
+
+def _to_api_item(item: dict) -> dict:
+    return {
+        "ticket": item["ticket"],
+        "positionId": item["positionId"],
+        "symbol": item["symbol"],
+        "direction": item["direction"],
+        "profit": item["profit"],
+        "volume": item["volume"],
+        "price": item["price"],
+        "time": item["time"],
+        "commission": item["commission"],
+        "swap": item["swap"],
+    }
+
+
+def _mt5_deals_to_api(mt5_deals: list) -> tuple[list, list]:
+    """Повертає (raw_list, deduped_list). deduped — лише закриття (entry=OUT), щоб не тягнути відкриті позиції."""
+    trade_deals = []
     for d in mt5_deals:
-        deal_type = d.get("type", 0)
-        if deal_type not in (0, 1):
+        if d.get("type") not in (0, 1):
             continue
-        direction = "BUY" if deal_type == 0 else "SELL"
-        position_id = d.get("position_id")
-        if position_id is None or position_id == 0:
-            position_id = d.get("ticket", 0)
+        trade_deals.append(_deal_to_item(d))
+    raw_list = [_to_api_item(item) for item in trade_deals]
+    by_key: dict = {}
+    for item in trade_deals:
+        pid = item["_position_id"]
+        key = (pid, item["ticket"]) if pid == 0 else pid
+        t = item["_time"]
+        if key not in by_key or t >= by_key[key]["_time"]:
+            by_key[key] = item
+    deduped = [
+        _to_api_item(item)
+        for item in by_key.values()
+        if item.get("_entry") == DEAL_ENTRY_OUT
+    ]
+    return raw_list, deduped
+
+
+def _mt5_orders_to_api(mt5_orders: list) -> list:
+    """Перетворює історію виконаних ордерів (filled) у формат веб-API. Лише BUY/SELL."""
+    result = []
+    for o in mt5_orders:
+        order_type = o.get("type", 0)
+        if order_type not in (0, 1):
+            continue
+        direction = "BUY" if order_type == 0 else "SELL"
+        position_id = o.get("position_id") or o.get("ticket", 0)
         try:
             position_id = int(position_id)
         except (TypeError, ValueError):
-            position_id = int(d.get("ticket", 0))
-        time_val = d.get("time")
+            position_id = int(o.get("ticket", 0))
+        time_val = o.get("time_done") or o.get("time_setup")
         if hasattr(time_val, "timestamp"):
             time_val = int(time_val.timestamp())
         else:
             time_val = int(time_val) if time_val is not None else 0
         result.append({
-            "ticket": d.get("ticket"),
+            "ticket": o.get("ticket"),
             "positionId": position_id,
-            "symbol": d.get("symbol", ""),
+            "symbol": str(o.get("symbol", "")).strip(),
             "direction": direction,
-            "profit": float(d.get("profit", 0) or 0),
-            "volume": float(d.get("volume", 0) or 0),
-            "price": float(d.get("price", 0) or 0),
+            "profit": 0.0,
+            "volume": float(o.get("volume_current", 0) or o.get("volume_initial", 0) or 0),
+            "price": float(o.get("price_current", 0) or o.get("price_open", 0) or 0),
             "time": time_val,
-            "commission": float(d.get("commission", 0) or 0),
-            "swap": float(d.get("swap", 0) or 0),
+            "commission": 0.0,
+            "swap": 0.0,
         })
     return result
 
@@ -172,8 +243,8 @@ def post_bridge_sync_done(cfg: dict) -> bool:
         return False
 
 
-def run_sync(cfg: dict) -> tuple[bool, str, int]:
-    """Повертає (success, message, synced_count). Повідомлення в поточній мові."""
+def run_sync(cfg: dict, last_sync_at_iso: Optional[str] = None) -> tuple[bool, str, int, list]:
+    """Повертає (success, message, synced_count, raw_deals). last_sync_at_iso: якщо задано — тягнемо угоди з початку того дня (включно)."""
     lang = get_language()
     mt5_login = int(cfg.get("mt5_login") or 0)
     mt5_password = cfg.get("mt5_password") or ""
@@ -185,34 +256,23 @@ def run_sync(cfg: dict) -> tuple[bool, str, int]:
         msg = get_text("msg_mt5_connect_failed", lang).format(err)
         if "-6" in str(err) or "Authorization failed" in str(err):
             msg += get_text("msg_mt5_hint", lang)
-        return False, msg, 0
+        return False, msg, 0, []
 
     try:
-        pending = get_pending_sync(cfg)
-        last_deal_at = pending.get("last_deal_at") if isinstance(pending, dict) else None
-        if last_deal_at and isinstance(last_deal_at, str):
-            from_time = datetime.fromisoformat(last_deal_at.replace("Z", "+00:00"))
-        else:
-            # Немає last_deal_at з Next — тягнемо всі угоди за період
-            from_time = datetime.now(pytz.UTC) - timedelta(days=30)
-        to_time = datetime.now(pytz.UTC)
+        # Максимально широкий діапазон: ніякої фільтрації по даті — усі угоди за весь час.
+        # MT5 API вимагає date_from/date_to, тому передаємо 1970 → зараз+1рік.
+        from_time = datetime(1970, 1, 1, tzinfo=pytz.UTC)
+        to_time = datetime.now(pytz.UTC) + timedelta(days=365)
         deals = get_deals(from_time, to_time)
+        api_deals_raw, api_deals = _mt5_deals_to_api(deals) if deals else ([], [])
 
-        if not deals:
-            save_last_sync(to_time.isoformat())
-            post_bridge_sync_done(cfg)
-            return True, get_text("msg_no_new_deals", lang), 0
-
-        api_deals = _mt5_deals_to_api(deals)
-        if not api_deals:
-            save_last_sync(to_time.isoformat())
-            post_bridge_sync_done(cfg)
-            return True, get_text("msg_no_new_deals", lang), 0
         if not post_sync_deals(cfg, api_deals):
-            return False, get_text("msg_send_deals_failed", lang), 0
+            return False, get_text("msg_send_deals_failed", lang), 0, api_deals_raw
         save_last_sync(to_time.isoformat())
         post_bridge_sync_done(cfg)
-        return True, get_text("msg_synced_n_deals", lang).format(len(api_deals)), len(api_deals)
+        if not api_deals:
+            return True, get_text("msg_no_new_deals", lang), 0, api_deals_raw
+        return True, get_text("msg_synced_n_deals", lang).format(len(api_deals)), len(api_deals), api_deals_raw
     finally:
         mt5_disconnect()
 
@@ -243,7 +303,7 @@ def main() -> bool:
         except FileNotFoundError:
             print("No config. Run with GUI and connect from browser first.")
             sys.exit(1)
-        ok, msg, _ = run_sync(cfg)
+        ok, msg, _, _ = run_sync(cfg)
         if not ok:
             print(msg)
             sys.exit(1)

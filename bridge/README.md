@@ -25,7 +25,7 @@ pip install -r requirements.txt
 - **sync_token** — Mt5Token для цього рахунку (з бекенду / tRPC)
 - **trading_account_id** — CUID рахунку
 - **mt5_login** — номер рахунку MT5 (число)
-- **mt5_password** — інвестор-пароль MT5 (юзер вводить у формі на фронті)
+- **mt5_password** — пароль MT5 для входу (юзер вводить у формі на фронті)
 - **mt5_server** — сервер MT5 (наприклад `Broker-Demo`)
 - **mt5_path** — опційно, порожній рядок для автовизначення
 

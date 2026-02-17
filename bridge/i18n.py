@@ -84,8 +84,8 @@ TEXTS: dict[str, dict[str, str]] = {
     },
     "msg_mt5_connect_failed": {"uk": "Помилка підключення MT5: {}", "en": "MT5 connection failed: {}"},
     "msg_mt5_hint": {
-        "uk": " (перевірте «Автоторгівля» в MT5 та інвестор-пароль)",
-        "en": " (check «Allow automated trading» in MT5 and investor password)",
+        "uk": " (перевірте «Автоторгівля» в MT5 та пароль)",
+        "en": " (check «Allow automated trading» in MT5 and password)",
     },
     "lang_select_title": {"uk": "Оберіть мову", "en": "Select language"},
     "btn_open_site": {"uk": "Відкрити сайт TradeTrack", "en": "Open TradeTrack website"},
