@@ -1,14 +1,19 @@
 """
 Локальний сервер: POST /config від фронту, GET/POST /sync-request для синку без пулінгу.
 Сервер працює постійно; після /config не завершується — очікує /sync-request з браузера.
+При POST /config перевірка креденшіалів у підпроцесі (--validate), щоб термінал не «залипав».
 """
 import json
+import os
 import queue
+import subprocess
+import sys
 import threading
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Callable, Optional, Dict, Any
 
-from config import load_config, save_config, get_language
+from config import load_config, save_config, get_language, debug_log
 from i18n import get_text
 
 CONFIG_SERVER_HOST = "127.0.0.1"
@@ -101,7 +106,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
             return
         try:
             login = data["mt5_login"]
-            int(login)
+            login = int(login)
         except (TypeError, ValueError):
             self._send_json(400, {"error": "mt5_login must be a number"})
             return
@@ -109,11 +114,43 @@ class BridgeHandler(BaseHTTPRequestHandler):
             "api_base_url": str(data["api_base_url"]).strip().rstrip("/"),
             "sync_token": str(data["sync_token"]).strip(),
             "trading_account_id": str(data["trading_account_id"]).strip(),
-            "mt5_login": int(login),
+            "mt5_login": login,
             "mt5_password": str(data["mt5_password"]),
             "mt5_server": str(data["mt5_server"]).strip(),
             "mt5_path": str(data.get("mt5_path") or "").strip(),
         }
+        # Перевірка в підпроцесі: після виходу процесу з'єднання з MT5 закривається, термінал не «залипає»
+        env = os.environ.copy()
+        env["MT5_LOGIN"] = str(config["mt5_login"])
+        env["MT5_PASSWORD"] = config["mt5_password"]
+        env["MT5_SERVER"] = config["mt5_server"]
+        if config.get("mt5_path"):
+            env["MT5_PATH"] = config["mt5_path"]
+        if getattr(sys, "frozen", False):
+            cmd = [sys.executable, "--validate"]
+        else:
+            cmd = [sys.executable, str(Path(__file__).resolve().parent / "main.py"), "--validate"]
+        try:
+            kw: dict = {
+                "env": env,
+                "capture_output": True,
+                "text": True,
+                "timeout": 60,
+                "cwd": str(Path(__file__).resolve().parent),
+            }
+            if sys.platform == "win32":
+                kw["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+            result = subprocess.run(cmd, **kw)
+        except subprocess.TimeoutExpired:
+            self._send_json(401, {"error": "MT5 validation timeout"})
+            return
+        except Exception as e:
+            self._send_json(401, {"error": str(e)})
+            return
+        if result.returncode != 0:
+            err_msg = (result.stderr or result.stdout or "MT5 connection failed").strip()
+            self._send_json(401, {"error": err_msg or "MT5 connection failed"})
+            return
         save_config(config)
         self._send_json(200, {"ok": True, "message": "Config saved. Connecting..."})
         lang = get_language()
@@ -157,11 +194,17 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 pass
         cfg = self._cfg_from_data(data) if data else None
         if cfg is None:
+            debug_log("sync-request: missing or invalid body; keys=" + str(list(data.keys()) if data else "[]"))
             self._send_json(
                 400,
                 {"error": "Credentials required in request body (api_base_url, sync_token, trading_account_id, mt5_login, mt5_password, mt5_server). Next sends them for each account."},
             )
             return
+        tid = cfg.get("trading_account_id", "")
+        login = cfg.get("mt5_login", "")
+        server = (cfg.get("mt5_server") or "")[:30]
+        debug_log(f"sync-request: trading_account_id={tid!r} mt5_login={login!r} mt5_server={server!r}")
+        self._log(f"Синхронізація для рахунку {tid!r}, MT5 login {login}")
         last_sync_at_iso = data.get("lastSyncAt") or data.get("last_sync_at") if data else None
         if last_sync_at_iso is not None and not isinstance(last_sync_at_iso, str):
             last_sync_at_iso = None

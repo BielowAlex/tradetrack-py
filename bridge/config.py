@@ -71,3 +71,17 @@ def save_language(lang: str) -> None:
     data = _load_state()
     data["language"] = lang if lang in ("uk", "en") else "uk"
     _save_state(data)
+
+
+DEBUG_LOG_PATH = get_base_dir() / "bridge_debug.log"
+
+
+def debug_log(msg: str) -> None:
+    """Дописує рядок у bridge_debug.log (для діагностики sync/deals)."""
+    try:
+        from datetime import datetime
+        ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(f"[{ts}] {msg}\n")
+    except OSError:
+        pass
